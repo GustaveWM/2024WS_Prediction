@@ -1,0 +1,513 @@
+---
+title: "Dodgers vs. Yankees World Series Prediction"
+author: "Gustave Miller"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Abstract
+
+I was thinking about this upcoming world series and how we are watching 2 
+powerhouse teams go at it for the world championship. Being a Dodgers fan, this 
+got me thinking, what can I do to predict the outcomes of the games our nation 
+will be following for the next week. So I will be first predicting the outcome 
+of the first game which happens to just be a few hours away. From this, I will 
+then be using a Bayesian model to further predict the outcome of the rest of 
+the series until one team wins it all.
+
+```{r}
+# Load the datasets and necessary libraries:
+library(dplyr)
+library(knitr)
+
+batters <- read.csv("C:/Users/gusmi/Dropbox (Your team)/PC/Desktop/Baseball Analytics/2024WS-Predict/DodgersYankees_Batter.csv")
+pitchers <- read.csv("C:/Users/gusmi/Dropbox (Your team)/PC/Desktop/Baseball Analytics/2024WS-Predict/DodgersYankees_Pitcher.csv") 
+```
+
+## Data
+
+Here is an example of what both the Pitcher dataset looks like as well as the
+Batter dataset
+
+```{r}
+head(pitchers)
+head(batters)
+```
+
+## Data Variables
+
+The data I will be using for this project constitutes of both pitcher and 
+batter data to allow me to produce the most accurate result I can. I will be 
+using data from both teams, pitching and batting, from ONLY the 2024 postseason 
+so far. I am doing this because regular season stats do not entirely account 
+for a players performance in the postseason as we have seen so far. Thus I will 
+be including the players who have at least played/pitched 1 game within this 
+postseason and using that for the simulation.
+
+Below you will find data dictionaries for both Batters and Pitchers discussing 
+the stats I will be utilizing within my functions to simulate at-bats.
+
+```{r include=FALSE}
+#Data Variables that I will be using/looking at for my monte carlo simulation
+# Define data for batters
+batters_stats <- data.frame(
+  Statistic = c("AVG", "OBP", "SLG", "OPS", "wOBA", "wRC+", "K%", "BB%"),
+  Definition = c(
+    "Batting Average - Ratio of hits to at-bats.",
+    "On-Base Percentage - Ratio of times on base to total plate appearances.",
+    "Slugging Percentage - Total bases per at-bat.",
+    "On-base Plus Slugging - Sum of OBP and SLG.",
+    "Weighted On-Base Average - Overall offensive contribution, adjusted for 
+    run value.",
+    "Weighted Runs Created Plus - Offensive performance metric, adjusted for 
+    league average.",
+    "Strikeout Percentage - Ratio of strikeouts to total plate appearances.",
+    "Walk Percentage - Ratio of walks to total plate appearances."
+  )
+)
+
+# Define data for pitchers
+pitchers_stats <- data.frame(
+  Statistic = c("ERA", "FIP", "WHIP", "K/9", "BB/9", "HR/9", "BABIP", "WAR"),
+  Definition = c(
+    "Earned Run Average - Average earned runs allowed per nine innings.",
+    "Fielding Independent Pitching - Estimates a pitcher's run prevention 
+    independent of fielding.",
+    "Walks and Hits Per Inning Pitched - Measure of how many baserunners a 
+    pitcher allows.",
+    "Strikeouts per 9 Innings - Average strikeouts per nine innings pitched.",
+    "Walks per 9 Innings - Average walks allowed per nine innings pitched.",
+    "Home Runs per 9 Innings - Average home runs allowed per nine innings pitched.",
+    "Batting Average on Balls in Play - Ratio of hits to balls in play.",
+    "Wins Above Replacement - Overall value of a player compared to a 
+    replacement-level player."
+  )
+)
+
+```
+```{r}
+# Create tables using kable
+cat("Batter Statistics") 
+kable(batters_stats, col.names = c("Statistic", "Definition"))
+```
+
+```{r}
+print("Pitcher Statistics")
+kable(pitchers_stats, col.names = c("Statistic", "Definition"))
+```
+
+
+## Monte Carlo Simulation
+
+First is the Monte Carlo Simulation I am using to simulate game 1 of the 2024
+World Series. The starting pitchers for this game were released early so I was
+able to account for that in my simulation by selecting them from the dataset. 
+Since I completed this prior to the starting lineups being released, I will be
+using 9 batters from the dataset from each team, there may be some error in 
+this as there is not a guaruntee those I select to start will be starting. 
+
+```{r}
+# Filter to select the starting pitchers
+dodgers_pitcher <- pitchers[pitchers$Name == 'Jack Flaherty' & 
+                              pitchers$Team == 'LAD' & pitchers$Type == 'SP', ]
+yankees_pitcher <- pitchers[pitchers$Name == 'Gerrit Cole' & 
+                              pitchers$Team == 'NYY' & pitchers$Type == 'SP', ]
+
+# Select 9 batters from each team to act as the starting 9
+dodgers_batters <- batters[batters$Team == 'LAD', ][1:9, ]
+yankees_batters <- batters[batters$Team == 'NYY', ][1:9, ]
+```
+
+### Function to simulate an at-bat of a batter
+
+The code in this chunk ultimately simulates an at-bat of a batter using the
+statistics present in the dataset I have chosen to use, this includes
+calculating the odds of a specific type of hit as well as a walk or strikeout.
+
+```{r}
+# Function to simulate a single at-bat for each batter
+simulate_at_bat <- function(batter, pitcher) {
+  # Calculate probabilities for the at-bat
+  k_prob <- pitcher$K.9 / 9
+  bb_prob <- pitcher$BB.9 / 9
+  hit_prob <- max(0, batter$AVG - (k_prob + bb_prob)) # Ensure non-negative
+  iso_prob <- batter$ISO
+  single_prob <- hit_prob * 0.5
+  double_prob <- iso_prob * 0.3
+  triple_prob <- iso_prob * 0.1
+  hr_prob <- iso_prob * 0.1
+  
+  # Ensure that the probabilities sum to 1
+  total_prob <- k_prob + bb_prob + single_prob + double_prob + triple_prob + hr_prob
+  k_prob <- k_prob / total_prob
+  bb_prob <- bb_prob / total_prob
+  single_prob <- single_prob / total_prob
+  double_prob <- double_prob / total_prob
+  triple_prob <- triple_prob / total_prob
+  hr_prob <- hr_prob / total_prob
+  
+  outcome <- sample(c('K', 'BB', '1B', '2B', '3B', 'HR'), size = 1, 
+                    prob = c(k_prob, bb_prob, single_prob, double_prob, triple_prob, hr_prob))
+  return(outcome)
+}
+```
+
+### Function for updating the bases and score when there is a hit
+
+This function here will help to update the bases after each batters outcome
+if it is a hit, if its not a hit (Strikeout or Walk), that is taken care of
+in the game simulation function. There is also some minor error here, as 
+players can make errors on fielding causing base runners to progress further
+or that there is a chance for a runner on second to score from a single. This
+function will return a score value and the updated bases from the hit.
+
+```{r}
+# Function to update bases and score based on the hit type/outcome of the hit
+update_bases <- function(bases, hit_type) {
+  score <- 0
+  if (hit_type == '1B') {
+    score <- bases[3]
+    bases <- c(1, bases[1:2])
+  } else if (hit_type == '2B') {
+    score <- bases[2] + bases[3]
+    bases <- c(0, 1, bases[1])
+  } else if (hit_type == '3B') {
+    score <- bases[1] + bases[2] + bases[3]
+    bases <- c(0, 0, 1)
+  } else if (hit_type == 'HR') {
+    score <- sum(bases) + 1
+    bases <- c(0, 0, 0)
+  }
+  return(list(bases = bases, score = score))
+}
+```
+
+### Inning Simulation function
+
+This next function is to simulate a single inning up until 3 outs are recorded.
+There is a lot occuring within this function such as keeping track of the score,
+bases, outs, as well as determining if a relief pitcher should relieve the 
+starting pitcher based on either amount of innings pitched, and amount of runs
+given up. This function handels Walks and Strikeouts as well, and returns
+the amount of runs scored in the inning.
+
+```{r}
+# Function to simulate an inning with potential pitcher change
+simulate_inning <- function(batters, pitcher, relief_pitchers=NULL, inning=1,
+                            runs=0) {
+  outs <- 0
+  score <- 0
+  bases <- c(0, 0, 0) # 000: bases empty, 100: runner on first, etc.
+  
+  while (outs < 3) {
+    batter <- batters[sample(nrow(batters), 1), ]
+    
+    # Check if a pitcher change is needed
+    if (!is.null(relief_pitchers) && inning >=5 && runs >= 5 && 
+        nrow(relief_pitchers) > 0) {
+      pitcher_to_use <- relief_pitchers[sample(nrow(relief_pitchers), 1), ]
+      relief_pitchers <- relief_pitchers[-1, ]
+    } else {
+      pitcher_to_use <- pitcher
+    }
+    
+    outcome <- simulate_at_bat(batter, pitcher_to_use)
+    
+    if (outcome == 'K') {
+      outs <- outs + 1
+    } else if (outcome == 'BB') {
+      if (bases[1] == 1) {
+        if (bases[2] == 1) {
+          if (bases[3] == 1) {
+            score <- score + 1
+            bases[3] <- 0
+          } else {
+            bases[3] <- 1
+          }
+        } else {
+          bases[2] <- 1
+        }
+      } else {
+        bases[1] <- 1
+      }
+    } else {
+      result <- update_bases(bases, outcome)
+      bases <- result$bases
+      score <- score + result$score
+    }
+  }
+  
+  return(score)
+}
+```
+
+### Game Simulation
+
+This function is the most important of all, it runs the simulation of the 
+entire game, and records the winner. It will run through a for loop for 9 
+iterations representing the 9 innings a game goes through, recording each run
+and taking into account pitching swaps for relief pitchers, also adding another
+constraint for if the pitcher has pitched to at least 25 batter if they have
+not given up the 5 runs or reached 5 innings since simulating amount of pitches
+is not happening here.
+
+```{r}
+# Function to simulate a game with potential pitcher changes
+simulate_game <- function(dodgers_batters, yankees_batters, dodgers_pitcher, 
+                          yankees_pitcher) {
+  dodgers_score <- 0
+  yankees_score <- 0
+  dodgers_batters_faced <- 0
+  yankees_batters_faced <- 0
+  
+  # Initialize the full list of relief pitchers for each game simulation
+  dodgers_relief_pitchers <- pitchers[pitchers$Team == 'LAD' & pitchers$Type == 'RP', ]
+  yankees_relief_pitchers <- pitchers[pitchers$Team == 'NYY' & pitchers$Type == 'RP', ]
+  
+  # Initialize runs allowed trackers for each pitcher
+  dodgers_pitcher_runs_allowed <- 0
+  yankees_pitcher_runs_allowed <- 0
+  
+  for (inning in 1:9) {
+    
+    # Dodgers pitcher criteria
+    if (inning >= 5 || (dodgers_pitcher_runs_allowed >= 5) || 
+        dodgers_batters_faced >= 25) {
+      if (nrow(dodgers_relief_pitchers) > 0) {
+        selected_dodgers_relief <- dodgers_relief_pitchers[sample(nrow(dodgers_relief_pitchers), 1), ]
+        inning_score <- simulate_inning(dodgers_batters, selected_dodgers_relief, dodgers_relief_pitchers, inning, dodgers_score)
+        dodgers_score <- dodgers_score + inning_score
+        dodgers_relief_pitchers <- dodgers_relief_pitchers[dodgers_relief_pitchers$Name != selected_dodgers_relief$Name, ]
+      } else {
+        inning_score <- simulate_inning(dodgers_batters, dodgers_pitcher, NULL, inning, dodgers_score)
+        dodgers_score <- dodgers_score + inning_score
+      }
+    } else {
+      inning_score <- simulate_inning(dodgers_batters, dodgers_pitcher, NULL, inning, dodgers_score)
+      dodgers_score <- dodgers_score + inning_score
+      dodgers_pitcher_runs_allowed <- dodgers_pitcher_runs_allowed + inning_score
+      dodgers_batters_faced <- dodgers_batters_faced + 1
+    }
+
+    # Yankees pitcher criteria
+    if (inning >= 5 || (yankees_pitcher_runs_allowed >= 5) || 
+        yankees_batters_faced >= 25) {
+      if (nrow(yankees_relief_pitchers) > 0) {
+        selected_yankees_relief <- yankees_relief_pitchers[sample(nrow(yankees_relief_pitchers), 1), ]
+        inning_score <- simulate_inning(yankees_batters,selected_yankees_relief,yankees_relief_pitchers, inning, yankees_score)
+        yankees_score <- yankees_score + inning_score
+        yankees_relief_pitchers <- yankees_relief_pitchers[yankees_relief_pitchers$Name != selected_yankees_relief$Name, ]
+      } else {
+        inning_score <- simulate_inning(yankees_batters, yankees_pitcher, NULL, inning, yankees_score)
+        yankees_score <- yankees_score + inning_score
+      }
+    } else {
+      inning_score <- simulate_inning(yankees_batters, yankees_pitcher, NULL, inning, yankees_score)
+      yankees_score <- yankees_score + inning_score
+      yankees_pitcher_runs_allowed <- yankees_pitcher_runs_allowed + inning_score
+      yankees_batters_faced <- yankees_batters_faced + 1
+    }
+  }
+  
+  if (dodgers_score > yankees_score) {
+    return('Dodgers')
+  } else {
+    return('Yankees')
+  }
+}
+```
+
+
+### Running the simulation
+
+Now I am running the Monte Carlo Simulation with 10,000 simulations for this 
+one game so I can return the most accurate result possible. Then takinig the 
+mean amount of games each team won and returning that to see which team won
+more. The output will have both teams probabilities of winnig this game 1 of
+the series, however for the sake of this, the team with the higher probability
+will be declared the winner of this game.
+
+```{r}
+set.seed(81)
+# Run the Monte Carlo simulation with 10000 simulations
+num_simulations <- 10000
+results <- c()
+
+# For reproducibility
+for (i in 1:num_simulations) {
+  winner <- simulate_game(dodgers_batters, yankees_batters, dodgers_pitcher, yankees_pitcher)
+  results <- c(results, winner)
+}
+
+# Calculate win probabilities
+dodgers_win_prob <- mean(results == 'Dodgers')
+yankees_win_prob <- mean(results == 'Yankees')
+
+cat(sprintf("Probability of Dodgers winning Game 1: %.2f%%\n", dodgers_win_prob * 100))
+cat(sprintf("Probability of Yankees winning Game 1: %.2f%%\n", yankees_win_prob * 100))
+
+if (dodgers_win_prob > yankees_win_prob){
+  cat(sprintf("Dodgers favored to win game 1 with a probability of %.2f%%\n", dodgers_win_prob * 100))
+} else {
+    cat(sprintf("Yankees favored to win game 1 with a probability of %.2f%%\n", yankees_win_prob * 100))
+}
+```
+
+
+
+# Bayesian Simulation to Determine the Result of Entire Series
+
+This next simulation I am doing involves a Bayesian model to simulate the rest 
+of the World Series between the Dodgers and Yankees. The simulation code 
+utilizes starting pitchers' data and prior win probabilities from a the Monte 
+Carlo simulation to calculate each team’s chances based on game results. 
+Specifically, it applies a Bayesian update function, (bayesian_series_update), 
+which recalculates probabilities after each game by factoring in the wins 
+needed for each team to secure the series.
+
+For each game, the simulation chooses a starting pitcher for each team, then 
+runs the simulation based on the stats to then update the amount of wins for
+the series each team has. Then outputs the winners of each game and the 
+entire series crowning one team the World Series Champion.
+
+### Obtaining Starting Pitchers
+
+```{r}
+# Function to get the starting pitcher for a specific game
+get_pitcher_for_game <- function(game_number, team, pitcher_data) {
+  if (team == "Dodgers") {
+    return(pitcher_data %>% filter(Team == 'LAD' & Type == 'SP') %>% 
+             slice(game_number))
+  } else {
+    return(pitcher_data %>% filter(Team == 'NYY' & Type == 'SP') %>% 
+             slice(game_number))
+  }
+}
+```
+
+### Creating the bayesian function to update win probabilities
+
+```{r}
+
+# Updated bayesian update function for series win probability
+bayesian_series_update <- function(prior, dodgers_wins, yankees_wins) {
+  # Calculate the wins remaining for each team to win the series
+  games_remaining_dodgers <- max(0, 4 - dodgers_wins)
+  games_remaining_yankees <- max(0, 4 - yankees_wins)
+  
+  # Adjust probabilities based on remaining games needed
+  prob_dodgers_win_series <- prior[1] * (1 / (games_remaining_dodgers + 1))
+  prob_yankees_win_series <- prior[2] * (1 / (games_remaining_yankees + 1))
+  
+  # Normalize to ensure the probabilities sum to 1
+  total_prob <- prob_dodgers_win_series + prob_yankees_win_series
+  posterior <- c(prob_dodgers_win_series / total_prob, 
+                 prob_yankees_win_series / total_prob)
+  
+  return(posterior)
+}
+
+```
+
+### Function to simulate the series 
+
+```{r}
+
+simulate_series <- function(num_games, initial_probs, pitchers, game_1_winner) {
+  # Initialize win counts
+  dodgers_wins <- 0
+  yankees_wins <- 0
+  current_probs <- initial_probs
+  
+  # Loop through each game
+  for (game in 1:num_games) {
+    # Ensure that current_probs has exactly two elements
+    if (length(current_probs) != 2) {
+      stop("current_probs must contain exactly two elements.")
+    }
+    
+    # Simulate game result based on current probabilities
+    game_result <- sample(c("Dodgers", "Yankees"), size = 1, replace = TRUE, prob = current_probs)
+    
+    # Update win counts
+    if (game_result == "Dodgers") {
+      dodgers_wins <- dodgers_wins + 1
+    } else {
+      yankees_wins <- yankees_wins + 1
+    }
+    
+    # Print game result
+    cat("Game", game, "Winner:", game_result, "| \n")
+    
+    # Check if a team has won the series
+    if (dodgers_wins == 4 || yankees_wins == 4) {
+      break
+    }
+    
+    # Adjust probabilities based on winner of the current game
+    current_probs <- if (game_result == "Dodgers") {
+      c(0.6, 0.4)  # Example adjusted probabilities if Dodgers win
+    } else {
+      c(0.4, 0.6)  # Example adjusted probabilities if Yankees win
+    }
+  }
+  
+  # Return final result of series
+  return(list(final_probs = current_probs, dodgers_wins = dodgers_wins, yankees_wins = yankees_wins))
+}
+```
+
+### Outputs and running of Simulation
+
+```{r}
+set.seed(81)
+# Initial win probabilities from Monte Carlo simulation
+initial_probs <- c(dodgers_win_prob, yankees_win_prob)
+
+# Determine Monte Carlo result for Game 1
+game_1_winner <- ifelse(dodgers_win_prob > yankees_win_prob, "Dodgers", "Yankees")
+
+# Run series simulation
+num_games <- 7
+series_result <- simulate_series(num_games, initial_probs, pitchers, game_1_winner)
+
+# Output final series result
+cat(sprintf("\nFinal Series Results: Dodgers Wins = %d, Yankees Wins = %d\n", series_result$dodgers_wins, series_result$yankees_wins))
+
+```
+From these results here we can see that the Dodgers will be crowned the 
+2024 World Series Champion.
+
+## Biases and Flaws
+
+There are a few biases present in this simulation as well as flaws that come
+with it, such as the application of randomness when choosing relief pitchers, 
+assuming the starting 9 batters. These are 2 examples which can change the 
+outcome of a game depending on who is playing. Next I dont account for many 
+other scenarios such as a batter being hit by a pitch, stealing a base, fielder
+errors, a runners speed on the bases, the distance of the outfield fence for 
+home runs, the types of pitches a pitcher uses. All of these and much more 
+contribute to the outcome of a game and which I am not using in this model.
+
+## Conclusion
+
+The application of a Monte Carlo simulation, paired with an application of a 
+Bayesian model, can help me to predict the outcome of this 2024 World Series
+matchup between the Dodgers and Yankees. Now I can only wait and see how 
+accurate my prediction is based on the actual outcome. 
+
+## Citations
+
+I used this site's search tool for both batting and pitching for both teams
+Major League Leaderboards - 2024 - Pitching | FanGraphs Baseball. (n.d.). 
+FanGraphs Baseball.
+[site](https://www.fangraphs.com/leaders/major-league?stats=pit&lg=all&qual=0&type=8&season=2024&season1=2024&ind=0&rost=&age=&filter=&players=0&team=22&pos=all&pageitems=30&postseason=Y)
+
